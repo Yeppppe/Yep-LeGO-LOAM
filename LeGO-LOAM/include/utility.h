@@ -136,11 +136,20 @@ extern const float historyKeyframeFitnessScore = 0.3; // the smaller the better 
 extern const float globalMapVisualizationSearchRadius = 500.0; // key frames with in n meters will be visualized
 
 
+//* 平滑度结构体
 struct smoothness_t{ 
-    float value;
-    size_t ind;
+    float value;   //平滑度值
+    size_t ind;    // 索引
 };
 
+//* 平滑度比较结构体
+//* 在 vector 中使用
+// vector<smoothness_t> smoothnesses;
+//* 添加元素 ...
+// sort(smoothnesses.begin(), smoothnesses.end(), by_value());
+
+//* 在 priority_queue 中使用
+// priority_queue<smoothness_t, vector<smoothness_t>, by_value> pq;
 struct by_value{ 
     bool operator()(smoothness_t const &left, smoothness_t const &right) { 
         return left.value < right.value;
@@ -150,14 +159,18 @@ struct by_value{
 /*
     * A point cloud type that has "ring" channel
     */
+//* 带环号的点云结构体
 struct PointXYZIR
 {
-    PCL_ADD_POINT4D
-    PCL_ADD_INTENSITY;
-    uint16_t ring;
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-} EIGEN_ALIGN16;
+    PCL_ADD_POINT4D;                  //* 增加 x,y,z,padding（padding专门为了确保是16字节对齐，不实际存储数据）
+    PCL_ADD_INTENSITY;                //* 增加 intensity
+    uint16_t ring;                    //* 激光雷达线束编号
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW   //* 确保内存对齐
+} EIGEN_ALIGN16;                      //* 16字节内存对齐
 
+//* POINT_CLOUD_REGISTER_POINT_STRUCT 是 PCL (Point Cloud Library) 中的一个宏，用于注册自定义点云类型。这个宏的作用是让 PCL 库能够识别和处理自定义的点云结构。
+//* POINT_CLOUD_REGISTER_POINT_STRUCT(结构体名称, (数据类型, 变量名, 字段名)...) 
+//* 当然在使用之前需要提前定义好数据类型的结构体
 POINT_CLOUD_REGISTER_POINT_STRUCT (PointXYZIR,  
                                    (float, x, x) (float, y, y)
                                    (float, z, z) (float, intensity, intensity)
@@ -167,6 +180,7 @@ POINT_CLOUD_REGISTER_POINT_STRUCT (PointXYZIR,
 /*
     * A point cloud type that has 6D pose info ([x,y,z,roll,pitch,yaw] intensity is time stamp)
     */
+//* 带姿态的点云结构体
 struct PointXYZIRPYT
 {
     PCL_ADD_POINT4D
