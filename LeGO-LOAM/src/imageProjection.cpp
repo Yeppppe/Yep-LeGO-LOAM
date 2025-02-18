@@ -287,6 +287,7 @@ public:
             //* 将弧度转化为角度 角度范围是(-180°，180°]
             horizonAngle = atan2(thisPoint.x, thisPoint.y) * 180 / M_PI;
             //* 角度偏移90°，并且将索引调整到图像中心，我的理解 此时对于一个x轴朝右的正方向坐标系来说 正中心就是x轴
+            //* 如果此时与y轴正方向重合(x轴向上y轴向左)，刚好columnIdn的坐标为Horizon_SCAN/2，即这个投影图是以y轴负方向为原点，顺时针展开的一个图
             columnIdn = -round((horizonAngle-90.0)/ang_res_x) + Horizon_SCAN/2;
             if (columnIdn >= Horizon_SCAN)
                 columnIdn -= Horizon_SCAN;
@@ -302,7 +303,7 @@ public:
             //* 存储距离值到距离矩阵
             rangeMat.at<float>(rowIdn, columnIdn) = range;
 
-            //* 设置点的强度(编码行列信息)
+            //* 设置点的强度(编码行列信息) 
             thisPoint.intensity = (float)rowIdn + (float)columnIdn / 10000.0;
 
             //* 计算点云的一维索引
@@ -326,15 +327,15 @@ public:
 
         //* 主要分析相邻扫描线之间的几何关系，来实现地面点检测
         for (size_t j = 0; j < Horizon_SCAN; ++j){                //* 遍历每一列
-            for (size_t i = 0; i < groundScanInd; ++i){           //* 遍历底部扫描线
+            for (size_t i = 0; i < groundScanInd; ++i){           //* 遍历底部七条扫描线，因为地面一定是在下面的
 
                 lowerInd = j + ( i )*Horizon_SCAN;    //* 当前扫描线上的点   Horizon_SCAN=1800
                 upperInd = j + (i+1)*Horizon_SCAN;    //* 上一扫描线上的点
 
-                //* 两点中如果任何一个点被表示为无效点，则无法判断地面特征    注意初始值为0
+                //* intensity为距离值，但是在resetParameters()函数中，最开始初始化所有的点的intensity为-1，如果经过projectPointCloud()处理后，值仍未-1，证明是未被处理的点可能是不合格
                 if (fullCloud->points[lowerInd].intensity == -1 ||
                     fullCloud->points[upperInd].intensity == -1){
-                    // no info to check, invalid points
+                    //* groundMat在resetParameters()函数中默认初始化为0
                     groundMat.at<int8_t>(i,j) = -1;
                     continue;
                 }
@@ -343,12 +344,12 @@ public:
                 diffY = fullCloud->points[upperInd].y - fullCloud->points[lowerInd].y;
                 diffZ = fullCloud->points[upperInd].z - fullCloud->points[lowerInd].z;
 
-                //* 计算差值向量与水平方向的夹角 
+                //* 计算差值向量与水平方向的夹角  水平地面上两点的Z值的差应该接近于0 
                 angle = atan2(diffZ, sqrt(diffX*diffX + diffY*diffY) ) * 180 / M_PI;
 
                 //* 如果两个点均为地面点，则两个点的向量组成的连线应该基本与水平面平行，即接近0°，sensorMountAngle应该是雷达安装的俯仰角
                 if (abs(angle - sensorMountAngle) <= 10){
-                    groundMat.at<int8_t>(i,j) = 1;                //* 将两个点都设置为平面点
+                    groundMat.at<int8_t>(i,j) = 1;                //* 将两个点都设置为地面点
                     groundMat.at<int8_t>(i+1,j) = 1;
                 }
             }
@@ -359,6 +360,7 @@ public:
         //* 标记后续不需要参与后续分割处理的点，主要包括地面点和无效点(即距离仍然为初始值浮点数最大值)
         for (size_t i = 0; i < N_SCAN; ++i){
             for (size_t j = 0; j < Horizon_SCAN; ++j){
+                //* rangeMat距离矩阵初始化即为FLT_MAX 即浮点数最大值，没被赋值就说明在projectPointCloud()函数中没被处理过
                 if (groundMat.at<int8_t>(i,j) == 1 || rangeMat.at<float>(i,j) == FLT_MAX){
                     labelMat.at<int>(i,j) = -1;    //* 标签设置为无效点
                 }
@@ -392,12 +394,12 @@ public:
             segMsg.startRingIndex[i] = sizeOfSegCloud-1 + 5;
 
             for (size_t j = 0; j < Horizon_SCAN; ++j) {
-                //* 处理有效分割点或地面点
+                //* 处理有效分割点或地面点，注意所有的地面点的labelMat的值都被赋值为了-1 即无效点
                 if (labelMat.at<int>(i,j) > 0 || groundMat.at<int8_t>(i,j) == 1){
                     // outliers that will not be used for optimization (always continue)
                     //* 对于离群点
                     if (labelMat.at<int>(i,j) == 999999){
-                        //* 非地面区域 每5个点保留一个 放入离群点中
+                        //* 非地面区域的离群点 每5个点保留一个 放入离群点中
                         if (i > groundScanInd && j % 5 == 0){
                             outlierCloud->push_back(fullCloud->points[j + i*Horizon_SCAN]);
                             continue;
@@ -406,7 +408,7 @@ public:
                         }
                     }
                     // majority of ground points are skipped
-                    //* 地面点抽稀 ，每五个点保留一个
+                    //* 跳过大部分地面点 对于每一个扫描线开始和结尾的几个点，如果是地面点则也会被加入分割类中
                     if (groundMat.at<int8_t>(i,j) == 1){
                         if (j%5!=0 && j>5 && j<Horizon_SCAN-5)
                             continue;
@@ -507,6 +509,7 @@ public:
                 else
                     alpha = segmentAlphaY;   //* 同理可得
                 //! 平滑度计算的物理具象是怎么样的 angle反应两点之间的平滑程度
+                //? 通过数学来看是一个角度值，但是这个角度为什么就能代表平滑度？
                 angle = atan2(d2*sin(alpha), (d1 -d2*cos(alpha)));
 
                 if (angle > segmentTheta){         //* 平滑度满足要求
@@ -537,7 +540,7 @@ public:
             for (size_t i = 0; i < N_SCAN; ++i)
                 if (lineCountFlag[i] == true)
                     ++lineCount;
-            if (lineCount >= segmentValidLineNum)
+            if (lineCount >= segmentValidLineNum)    //* 在总数目仅大于阈值的情况下，查看跨越了多少条扫描线，当跨越的扫描线也超过了阈值，则可以认为是一个类别
                 feasibleSegment = true;            
         }
         // segment is valid, mark these points
@@ -562,7 +565,7 @@ public:
 
         //* pubOutlierCloud离群点  pubSegmentedCloud带少数地面的分割点云  pubFullCloud完整点云(有订阅者)  pubGroundCloud地面点云(有订阅者)
         //* pubSegmentedCloudPure纯分割聚类点云  含有完整信息的点云
-        pcl::toROSMsg(*outlierCloud, laserCloudTemp);
+        pcl::toROSMsg(*outlierCloud, laserCloudTemp);       //* 离群点是不会包含地面点的
         laserCloudTemp.header.stamp = cloudHeader.stamp;
         laserCloudTemp.header.frame_id = "base_link";
         pubOutlierCloud.publish(laserCloudTemp);
@@ -592,7 +595,8 @@ public:
             laserCloudTemp.header.frame_id = "base_link";
             pubSegmentedCloudPure.publish(laserCloudTemp);
         }
-        // projected full cloud info
+        // projected full cloud info       
+        //* fullInfoCloud向比较于fullCloud多出了一个range距离信息
         if (pubFullInfoCloud.getNumSubscribers() != 0){
             pcl::toROSMsg(*fullInfoCloud, laserCloudTemp);
             laserCloudTemp.header.stamp = cloudHeader.stamp;
