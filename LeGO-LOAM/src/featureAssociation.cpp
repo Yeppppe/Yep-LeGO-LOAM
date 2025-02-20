@@ -382,7 +382,10 @@ public:
     //* 属于分两步走，因为雷达拿到的永远是相对坐标，先从雷达->当下imu转换坐标找到相对坐标，在从相对坐标转换回原始imu坐标
     void TransformToStartIMU(PointType *p)
     {
-        //* 绕roll旋转
+        // point.x = segmentedCloud->points[i].y;
+        // point.y = segmentedCloud->points[i].z;
+        // point.z = segmentedCloud->points[i].x;
+        //* 绕roll旋转  p->z对应的就是之前的x点 x点不动 其实就是绕着roll旋转
         float x1 = cos(imuRollCur) * p->x - sin(imuRollCur) * p->y;
         float y1 = sin(imuRollCur) * p->x + cos(imuRollCur) * p->y;
         float z1 = p->z;
@@ -397,6 +400,7 @@ public:
         float y3 = y2;
         float z3 = -sin(imuYawCur) * x2 + cos(imuYawCur) * z2;
 
+        //* 注意接下来的变换 我并不想要当前点在原地图坐标系下的坐标，而是想变换回到原坐标系，因此需要反着变换回去
         // imu z -> 车 Y
         //* 通过反yaw角旋转转换到初始原点的坐标系方向
         float x4 = cosImuYawStart * x3 - sinImuYawStart * z3;
@@ -411,7 +415,8 @@ public:
 
         // imu x -> 车 Z
         //* 通过反row角旋转转换到初始原点的坐标系方向
-        p->x = cosImuRollStart * x5 + sinImuRollStart * y5 + imuShiftFromStartXCur;
+        //* 这下面的代码加上了imuShiftFromStartXCur,imuShiftFromStartYCur,imuShiftFromStartZCur 所以变换回去得到了全局绝对坐标
+        p->x = cosImuRollStart * x5 + sinImuRollStart * y5 + imuShiftFromStartXCur;    //* imuShiftFromStartXCur是那个一直没被调用的右值，所以一直接近为0，因此仍然是相对坐标，imuShiftFromStartXCur理论上来说是两帧之间的位移量
         p->y = -sinImuRollStart * x5 + cosImuRollStart * y5 + imuShiftFromStartYCur;
         p->z = z5 + imuShiftFromStartZCur;
     }
@@ -429,16 +434,15 @@ public:
         // X → Z
         // Y → X
         // Z → Y
-        //* 第一步：消除滚转角(roll)影响
+        //* 首先 GPT说imu测量得到的角度是一种外旋角度
+        //* R = Rz(ψ) * Ry(θ) * Rx(φ) 即从欧拉角变换为旋转矩阵，表示从世界坐标系转换到当前坐标系的旋转矩阵
         float x1 = cos(roll) * accX - sin(roll) * accY;
         float y1 = sin(roll) * accX + cos(roll) * accY;
         float z1 = accZ;
-        //* 第二步：消除俯仰角(pitch)影响
+
         float x2 = x1;
         float y2 = cos(pitch) * y1 - sin(pitch) * z1;
         float z2 = sin(pitch) * y1 + cos(pitch) * z1;
-        //* 第三步：消除偏航角(yaw)影响
-        //* 拿到的是消除转交后的车体坐标系三个方向的加速度
         accX = cos(yaw) * x2 + sin(yaw) * z2;
         accY = y2;
         accZ = -sin(yaw) * x2 + cos(yaw) * z2;
@@ -548,7 +552,7 @@ public:
     void adjustDistortion()
     {
         bool halfPassed = false;
-        //* segmentedCloud带有少部分地面点
+        //* segmentedCloud带有少部分地面点 此时segmentedCloud是相对位置点云坐标
         int cloudSize = segmentedCloud->points.size();
 
         PointType point;
@@ -572,7 +576,6 @@ public:
                     halfPassed = true;
             } else {
                 //* 处理后半圈扫描
-                //! 这部分也比较疑惑
                 ori += 2 * M_PI;  //* 保持角度单调递增
 
                 if (ori < segInfo.endOrientation - M_PI * 3 / 2)
@@ -701,11 +704,11 @@ public:
                     //! 将当前IMU速度转换到起始IMU坐标系下
                     //! imuVeloFromStartXCur在后面用来表示什么？ 后面遇到了再回来看看
                     VeloToStartIMU();
-                    //* 将point从当前imu坐标转换到起始imu坐标系，再转换到起始原点坐标系下
+                    //? 这部
                     TransformToStartIMU(&point);
                 }
             }
-            //* 更更新全局地图点，此时segmentedCloud已经是全局地图点了
+            //* segmentedCloud是相对点，ShiftToStartIMU没用上 好像实际上并没有畸变矫正成功
             segmentedCloud->points[i] = point;
         }
         //* 把最新的imu数据记录下来用来当作下一次的迭代开始时间点
@@ -715,7 +718,7 @@ public:
     //* 计算点云中每个点的平滑度（曲率），用于后续特征提取
     void calculateSmoothness()
     {
-        //* 此时segmentedCloud为全局地图点
+        //* 此时segmentedCloud为去畸变后的点
         int cloudSize = segmentedCloud->points.size();
         for (int i = 5; i < cloudSize - 5; i++) {
 
@@ -941,7 +944,7 @@ public:
 	    }
     }
 
-    //* 当前点变换到起始点 当前点的相对坐标变换到起始点的绝对坐标
+    //* 当前点变换到起始点 当前点的绝对坐标到车体系下的相对坐标
     void TransformToStart(PointType const * const pi, PointType * const po)
     {
         //? 缩放系数 这个缩放系数为什么这样得到
@@ -980,7 +983,7 @@ public:
         float tx = s * transformCur[3];
         float ty = s * transformCur[4];
         float tz = s * transformCur[5];
-
+ 
         float x1 = cos(rz) * (pi->x - tx) + sin(rz) * (pi->y - ty);
         float y1 = -sin(rz) * (pi->x - tx) + cos(rz) * (pi->y - ty);
         float z1 = (pi->z - tz);
@@ -1157,7 +1160,7 @@ public:
             TransformToStart(&cornerPointsSharp->points[i], &pointSel);
 
             if (iterCount % 5 == 0) {
-
+                //? kd树是从将相对坐标在绝对坐标中找点吗？ 应该不是把
                 kdtreeCornerLast->nearestKSearch(pointSel, 1, pointSearchInd, pointSearchSqDis);
                 int closestPointInd = -1, minPointInd2 = -1;
                 
@@ -1262,11 +1265,13 @@ public:
     //* 平面特征的对应点查找和特征匹配
     void findCorrespondingSurfFeatures(int iterCount){
 
-        //* surfPointsFlat保存的是纯平面点
+        //* surfPointsFlat保存的是纯平面点 且它是通过surfPointsFlat->push_back(segmentedCloud->points[ind]);得到的 所以是去畸变后的点
         int surfPointsFlatNum = surfPointsFlat->points.size();
 
         for (int i = 0; i < surfPointsFlatNum; i++) {
 
+            //* 将平面点反变换会车体坐标系下 且pointSel为绝对坐标，感觉很傻逼啊，为啥偏移量都是减法，tnnd前面也觉得离谱都是递减的，难道他把距离全变成负数了？换来换去的 帧他妈离谱啊。这个钩子.cpp以及看第三次了，才看出点眉目，到底我是傻逼还是代码傻逼啊。去畸变好像还没去成。
+            //* 但是kd树用的相对坐标啊，那就只能是transformCur是相对坐标？
             TransformToStart(&surfPointsFlat->points[i], &pointSel);
             //* 每5次迭代更新一次特征匹配
             if (iterCount % 5 == 0) {
@@ -1385,9 +1390,9 @@ public:
                     coeff.z = s * pc;
                     coeff.intensity = s * pd2;    // 存储加权后的距离
 
-                    //* 保存有效的特征对应
+                    //* 保存有效的特征对应 coeffSel存储的好像是平面法向量以及加权后的距离
                     laserCloudOri->push_back(surfPointsFlat->points[i]);
-                    coeffSel->push_back(coeff);
+                    coeffSel->push_back(coeff);  
                 }
             }
         }
@@ -1783,6 +1788,7 @@ public:
         imuYawLast = imuYawCur;
         imuRollLast = imuRollCur;
 
+        //? 始终为 0 ？ imuShiftFromStartXCur好像没有在左值部分被赋过值
         imuShiftFromStartX = imuShiftFromStartXCur;
         imuShiftFromStartY = imuShiftFromStartYCur;
         imuShiftFromStartZ = imuShiftFromStartZCur;
@@ -1792,6 +1798,7 @@ public:
         imuVeloFromStartZ = imuVeloFromStartZCur;
 
         //* imuAngularFromStartX = imuAngularRotationXCur - imuAngularRotationXLast 记录的是当前imu与上一次imu的角度变化量
+        //* transformCur[0-2]都是负的 = imuAngularRotationXLast - imuAngularRotationXCur
         if (imuAngularFromStartX != 0 || imuAngularFromStartY != 0 || imuAngularFromStartZ != 0){
             transformCur[0] = - imuAngularFromStartY;
             transformCur[1] = - imuAngularFromStartZ;
@@ -1841,9 +1848,12 @@ public:
 
     void integrateTransformation(){
         float rx, ry, rz, tx, ty, tz;
+        //* transformSum[0/1/2]当前累计的旋转角   transformCur[0/1/2]需要累计的新旋转角（注意看 他是负的 我就说很傻逼吧）   rx ry rz 输出的累计后的旋转角
+        //! 这段代码没看 2025-0220-1929今天有点事
         AccumulateRotation(transformSum[0], transformSum[1], transformSum[2], 
                            -transformCur[0], -transformCur[1], -transformCur[2], rx, ry, rz);
-
+        
+        //* 接下来是处理平移部分
         float x1 = cos(rz) * (transformCur[3] - imuShiftFromStartX) 
                  - sin(rz) * (transformCur[4] - imuShiftFromStartY);
         float y1 = sin(rz) * (transformCur[3] - imuShiftFromStartX) 
@@ -1858,9 +1868,10 @@ public:
         ty = transformSum[4] - y2;
         tz = transformSum[5] - (-sin(ry) * x2 + cos(ry) * z2);
 
+        //* 反正就是输出了一个新的累计后的旋转角
         PluginIMURotation(rx, ry, rz, imuPitchStart, imuYawStart, imuRollStart, 
                           imuPitchLast, imuYawLast, imuRollLast, rx, ry, rz);
-
+        
         transformSum[0] = rx;
         transformSum[1] = ry;
         transformSum[2] = rz;
@@ -1870,6 +1881,7 @@ public:
     }
 
     void publishOdometry(){
+        //* 注意看 他用的row是正的  pitch和yaw 是负的，说明什么 可能他一开始创建坐标系，就不是右手系！ 我就不信后面的代码都这么邪门 tnnd
         geometry_msgs::Quaternion geoQuat = tf::createQuaternionMsgFromRollPitchYaw(transformSum[2], -transformSum[0], -transformSum[1]);
 
         laserOdometry.header.stamp = cloudHeader.stamp;
@@ -1882,6 +1894,7 @@ public:
         laserOdometry.pose.pose.position.z = transformSum[5];
         pubLaserOdometry.publish(laserOdometry);
 
+        //* 发布tf变换用的
         laserOdometryTrans.stamp_ = cloudHeader.stamp;
         laserOdometryTrans.setRotation(tf::Quaternion(-geoQuat.y, -geoQuat.z, geoQuat.x, geoQuat.w));
         laserOdometryTrans.setOrigin(tf::Vector3(transformSum[3], transformSum[4], transformSum[5]));
@@ -1975,13 +1988,13 @@ public:
         /**
         	1. Feature Extraction
         */
-        //* 点云去畸变
+        //* 点云去畸变 去畸变后的segmentedCloud已经是全局坐标系下的坐标了
         adjustDistortion();
 
-        //* 计算segmentedCloud中每个点的曲率
+        //* 计算segmentedCloudInfo 即相对点云坐标 计算每个点的曲率
         calculateSmoothness();
 
-        //* 标记深度发生突变的点
+        //* 同样使用的是segmentedCloudInfo 相对点云坐标，标记深度发生突变的点
         markOccludedPoints();
 
         //* 提取特征点
@@ -1997,17 +2010,21 @@ public:
             checkSystemInitialization();
             return;
         }
-
+        //******************************** 从这往下的三个函数 基本都没太看懂 */
         //? 初始化位姿估计，关键在于弄懂transformCur的六个变量到底代表什么意思
+        //! 六个变量分别是 pitch  yaw  roll  速度方向的X Y Z
         updateInitialGuess();
 
-        //? 平面特征迭代优化  角点特征迭代优化
+        //? 平面特征迭代优化  角点特征迭代优化 
+        //! 我怀疑他是帧间的优化 transformCur就是优化的局部帧间位姿变换
         updateTransformation();
 
+        //* 将帧间的旋转和平移 进行累计，得到初步的里程计信息
         integrateTransformation();
 
         publishOdometry();
 
+        //* 也没看懂  希望不影响我看后面两个.cpp吧
         publishCloudsLast(); // cloud to mapOptimization
     }
 };
