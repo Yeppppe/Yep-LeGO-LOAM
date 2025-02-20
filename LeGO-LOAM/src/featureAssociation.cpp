@@ -357,7 +357,7 @@ public:
         imuShiftFromStartZCur = z2;
     }
 
-    //* 将速度从当前IMU速度转换到起始IMU坐标系下
+    //! 这部分没太看懂
     void VeloToStartIMU()
     {
         //* 计算相对于起始时刻的速度差
@@ -379,6 +379,7 @@ public:
     }
 
     //* 将点云坐标从当前IMU坐标系转换到起始IMU坐标系
+    //* 属于分两步走，因为雷达拿到的永远是相对坐标，先从雷达->当下imu转换坐标找到相对坐标，在从相对坐标转换回原始imu坐标
     void TransformToStartIMU(PointType *p)
     {
         //* 绕roll旋转
@@ -397,19 +398,19 @@ public:
         float z3 = -sin(imuYawCur) * x2 + cos(imuYawCur) * z2;
 
         // imu z -> 车 Y
-        //* 起始坐标系下的反yaw角旋转
+        //* 通过反yaw角旋转转换到初始原点的坐标系方向
         float x4 = cosImuYawStart * x3 - sinImuYawStart * z3;
         float y4 = y3;
         float z4 = sinImuYawStart * x3 + cosImuYawStart * z3;
 
         // imu y -> 车 x
-        //* 起始imu坐标系下的反pitch角旋转
+        //* 通过反pitch角旋转转换到初始原点的坐标系方向
         float x5 = x4;
         float y5 = cosImuPitchStart * y4 + sinImuPitchStart * z4;
         float z5 = -sinImuPitchStart * y4 + cosImuPitchStart * z4;
 
         // imu x -> 车 Z
-        //* 起始imu坐标系下的反Roll角旋转
+        //* 通过反row角旋转转换到初始原点的坐标系方向
         p->x = cosImuRollStart * x5 + sinImuRollStart * y5 + imuShiftFromStartXCur;
         p->y = -sinImuRollStart * x5 + cosImuRollStart * y5 + imuShiftFromStartYCur;
         p->z = z5 + imuShiftFromStartZCur;
@@ -420,7 +421,7 @@ public:
         float roll = imuRoll[imuPointerLast];
         float pitch = imuPitch[imuPointerLast];
         float yaw = imuYaw[imuPointerLast];
-        float accX = imuAccX[imuPointerLast];
+        float accX = imuAccX[imuPointerLast];    //* 这边的加速度是在车体坐标系下的XYZ
         float accY = imuAccY[imuPointerLast];
         float accZ = imuAccZ[imuPointerLast];
         //? 还是觉得有点怪
@@ -437,6 +438,7 @@ public:
         float y2 = cos(pitch) * y1 - sin(pitch) * z1;
         float z2 = sin(pitch) * y1 + cos(pitch) * z1;
         //* 第三步：消除偏航角(yaw)影响
+        //* 拿到的是消除转交后的车体坐标系三个方向的加速度
         accX = cos(yaw) * x2 + sin(yaw) * z2;
         accY = y2;
         accZ = -sin(yaw) * x2 + cos(yaw) * z2;
@@ -446,12 +448,15 @@ public:
         double timeDiff = imuTime[imuPointerLast] - imuTime[imuPointerBack];
 
         //* 在同一个扫描周期内 0.1秒
+        //* imuShiftX,imuShiftY,imuShiftZ表示的是当前时刻的绝对位移
+        //* imuVeloX,imuVeloY,imuVeloZ 是当前时刻的速度
+        //* imuAngularRotationX,imuAngularRotationY,imuAngularRotationZ是当前时刻的角度
         if (timeDiff < scanPeriod) {
             //* 位移积分公式
             imuShiftX[imuPointerLast] = imuShiftX[imuPointerBack] + imuVeloX[imuPointerBack] * timeDiff + accX * timeDiff * timeDiff / 2;
             imuShiftY[imuPointerLast] = imuShiftY[imuPointerBack] + imuVeloY[imuPointerBack] * timeDiff + accY * timeDiff * timeDiff / 2;
             imuShiftZ[imuPointerLast] = imuShiftZ[imuPointerBack] + imuVeloZ[imuPointerBack] * timeDiff + accZ * timeDiff * timeDiff / 2;
-            //* 速度公式
+            //* 速度公式 accX,accY,accZ都是对应的车体坐标系下的
             imuVeloX[imuPointerLast] = imuVeloX[imuPointerBack] + accX * timeDiff;
             imuVeloY[imuPointerLast] = imuVeloY[imuPointerBack] + accY * timeDiff;
             imuVeloZ[imuPointerLast] = imuVeloZ[imuPointerBack] + accZ * timeDiff;
@@ -472,10 +477,11 @@ public:
         //* 补偿重力加速度，转换到水平坐标系,去除了重力加速度的影响
         //* row绕x轴的旋转角  pitch绕y轴的旋转角  yaw 绕z轴的旋转角
         // 坐标系映射关系：
-        //* IMU坐标系 → 车体坐标系   所有代码都是这样的吗？
-        //* X → Y 
-        //* Y → Z 
-        //* Z → X 
+        //* IMU坐标系 → 车体坐标系   imu是横着放的
+        //* X → Z
+        //* Y → X 
+        //* Z → Y 
+        //* https://blog.csdn.net/l1323/article/details/106028032 这个链接很好的解释了这个的由来
         float accX = imuIn->linear_acceleration.y - sin(roll) * cos(pitch) * 9.81;
         float accY = imuIn->linear_acceleration.z - cos(roll) * cos(pitch) * 9.81;
         float accZ = imuIn->linear_acceleration.x + sin(pitch) * 9.81;
@@ -486,22 +492,22 @@ public:
         //* 存储时间戳 
         imuTime[imuPointerLast] = imuIn->header.stamp.toSec(); 
 
-        //* 存储角度 
+        //* 存储角度，存储的是IMU补偿过的roll实角度
         imuRoll[imuPointerLast] = roll; 
         imuPitch[imuPointerLast] = pitch; 
         imuYaw[imuPointerLast] = yaw; 
 
-        //* 存储补偿后的加速度
+        //* 存储补偿后的加速度 这个坐标系为车体坐标系的X,Y,Z
         imuAccX[imuPointerLast] = accX;
         imuAccY[imuPointerLast] = accY;
         imuAccZ[imuPointerLast] = accZ;
 
-        //* 存储角速度
+        //* 存储角速度 这个角速度就是imu的角速度
         imuAngularVeloX[imuPointerLast] = imuIn->angular_velocity.x;
         imuAngularVeloY[imuPointerLast] = imuIn->angular_velocity.y;
         imuAngularVeloZ[imuPointerLast] = imuIn->angular_velocity.z;
 
-        //* 累计计算IMU的位移和旋转
+        //* 累计计算IMU的位移，速度和旋转
         AccumulateIMUShiftAndRotation();
     }
 
@@ -636,10 +642,12 @@ public:
                         imuYawCur = imuYaw[imuPointerFront] * ratioFront + imuYaw[imuPointerBack] * ratioBack;
                     }
 
+                    //* imuVeloXCur,imuVeloXCur,imuVeloXCur 也是车体坐标系下的
                     imuVeloXCur = imuVeloX[imuPointerFront] * ratioFront + imuVeloX[imuPointerBack] * ratioBack;
                     imuVeloYCur = imuVeloY[imuPointerFront] * ratioFront + imuVeloY[imuPointerBack] * ratioBack;
                     imuVeloZCur = imuVeloZ[imuPointerFront] * ratioFront + imuVeloZ[imuPointerBack] * ratioBack;
 
+                    //* imuShiftX是在车体坐标系下的，因此imuShiftXCur，imuShiftXCur，imuShiftXCur也都是车体坐标系下
                     imuShiftXCur = imuShiftX[imuPointerFront] * ratioFront + imuShiftX[imuPointerBack] * ratioBack;
                     imuShiftYCur = imuShiftY[imuPointerFront] * ratioFront + imuShiftY[imuPointerBack] * ratioBack;
                     imuShiftZCur = imuShiftZ[imuPointerFront] * ratioFront + imuShiftZ[imuPointerBack] * ratioBack;
@@ -647,10 +655,12 @@ public:
                 //* 对于第一个点进行特殊处理
                 if (i == 0) {
                     //* 记录起始状态
+                    //* imuRollCur,imuPitchCur,imuYawCur对应的是imu自己的坐标系的角度值
                     imuRollStart = imuRollCur;
                     imuPitchStart = imuPitchCur;
                     imuYawStart = imuYawCur;
 
+                    //* imuVeloXStart是当前imu速度到上一时刻imu的速度差 再转到绝对坐标下
                     imuVeloXStart = imuVeloXCur;
                     imuVeloYStart = imuVeloYCur;
                     imuVeloZStart = imuVeloZCur;
@@ -659,6 +669,8 @@ public:
                     imuShiftYStart = imuShiftYCur;
                     imuShiftZStart = imuShiftZCur;
 
+                    //* 暂时假设imuAngularRotationXCur 表达的是imu自己坐标系的旋转，因为他是由imuAngularVeloX累计而来，而imuAngularVeloX[imuPointerLast] = imuIn->angular_velocity.x;
+                    //! 所以姑且可以认为跟速度和位移有关的imu起始实际上都转换到是车体坐标系下的表示，关于旋转，角度的imu都是在自己imu坐标系下
                     if (timeScanCur + pointTime > imuTime[imuPointerFront]) {
                         imuAngularRotationXCur = imuAngularRotationX[imuPointerFront];
                         imuAngularRotationYCur = imuAngularRotationY[imuPointerFront];
@@ -674,7 +686,7 @@ public:
                         imuAngularRotationZCur = imuAngularRotationZ[imuPointerFront] * ratioFront + imuAngularRotationZ[imuPointerBack] * ratioBack;
                     }
 
-                    //? 计算与上一帧最后一个点的角度变化？
+                    //* 计算当前时刻imu角度值与上一时刻的角度值的变化量
                     imuAngularFromStartX = imuAngularRotationXCur - imuAngularRotationXLast;
                     imuAngularFromStartY = imuAngularRotationYCur - imuAngularRotationYLast;
                     imuAngularFromStartZ = imuAngularRotationZCur - imuAngularRotationZLast;
@@ -683,14 +695,17 @@ public:
                     imuAngularRotationYLast = imuAngularRotationYCur;
                     imuAngularRotationZLast = imuAngularRotationZCur;
 
+                    //* 计算起始时刻第一个点对应的roll pitch yaw的sin和cos值
                     updateImuRollPitchYawStartSinCos();
                 } else {
-                    //* 将当前IMU速度转换到起始IMU坐标系下
+                    //! 将当前IMU速度转换到起始IMU坐标系下
+                    //! imuVeloFromStartXCur在后面用来表示什么？ 后面遇到了再回来看看
                     VeloToStartIMU();
-                    //* 将point从当前imu坐标转换到起始imu坐标系，再转换到起始雷达坐标系下
+                    //* 将point从当前imu坐标转换到起始imu坐标系，再转换到起始原点坐标系下
                     TransformToStartIMU(&point);
                 }
             }
+            //* 更更新全局地图点，此时segmentedCloud已经是全局地图点了
             segmentedCloud->points[i] = point;
         }
         //* 把最新的imu数据记录下来用来当作下一次的迭代开始时间点
@@ -700,6 +715,7 @@ public:
     //* 计算点云中每个点的平滑度（曲率），用于后续特征提取
     void calculateSmoothness()
     {
+        //* 此时segmentedCloud为全局地图点
         int cloudSize = segmentedCloud->points.size();
         for (int i = 5; i < cloudSize - 5; i++) {
 
@@ -724,9 +740,10 @@ public:
     void markOccludedPoints()
     {
         int cloudSize = segmentedCloud->points.size();
-
+        //* 理论上来说segmentedCloud 与 segInfo的点云数量应该相同，只不过segInfo包含range信息
         for (int i = 5; i < cloudSize - 6; ++i){
 
+            //* segInfo对应的还是雷达相对位置点
             float depth1 = segInfo.segmentedCloudRange[i];
             float depth2 = segInfo.segmentedCloudRange[i+1];
             //* 计算列索引差，水平方向的距离 ，对于连续的未被过滤的点来说，相邻列索引差应该为1
@@ -796,7 +813,7 @@ public:
                 //* 从大到小排序
                 for (int k = ep; k >= sp; k--) {     
                     int ind = cloudSmoothness[k].ind;
-                    //* 未被选择点，且曲率大于阈值edgeThreshold=0.1 且不是地面点
+                    //* 未被选择点（在上一个函数处理中，深度突变点被Picked为1，在后续循环中 被选择为角点也会属于被选择），且曲率大于阈值edgeThreshold=0.1 且不是地面点
                     if (cloudNeighborPicked[ind] == 0 &&
                         cloudCurvature[ind] > edgeThreshold &&
                         segInfo.segmentedCloudGroundFlag[ind] == false) {
@@ -874,6 +891,7 @@ public:
 
                 //* 收集所有未被标记为角点的点
                 for (int k = sp; k <= ep; k++) {
+                    //* cloudLabel在初始化的时候就全都为0
                     if (cloudLabel[k] <= 0) {
                         surfPointsLessFlatScan->push_back(segmentedCloud->points[k]);
                     }
@@ -1728,7 +1746,7 @@ public:
         surfPointsLessFlat = laserCloudSurfLast;
         laserCloudSurfLast = laserCloudTemp;
 
-        //* 为上一帧特征建立kd树
+        //* 为上一帧特征建立kd树  表面看是角点和平面点，实际上是次角点和次平面点
         kdtreeCornerLast->setInputCloud(laserCloudCornerLast);
         kdtreeSurfLast->setInputCloud(laserCloudSurfLast);
 
@@ -1750,7 +1768,7 @@ public:
         laserCloudSurfLast2.header.frame_id = "/camera";
         pubLaserCloudSurfLast.publish(laserCloudSurfLast2);
 
-        //? 使用IMU的初始化姿态角更新
+        //? 使用IMU的初始化姿态角更新 可能是因为yaw角容易漂移，因此不用yaw角当前角度作为初始化
         transformSum[0] += imuPitchStart;
         transformSum[2] += imuRollStart;
 
@@ -1773,7 +1791,7 @@ public:
         imuVeloFromStartY = imuVeloFromStartYCur;
         imuVeloFromStartZ = imuVeloFromStartZCur;
 
-        //* 记录的是角度的变化量
+        //* imuAngularFromStartX = imuAngularRotationXCur - imuAngularRotationXLast 记录的是当前imu与上一次imu的角度变化量
         if (imuAngularFromStartX != 0 || imuAngularFromStartY != 0 || imuAngularFromStartZ != 0){
             transformCur[0] = - imuAngularFromStartY;
             transformCur[1] = - imuAngularFromStartZ;
@@ -1781,6 +1799,7 @@ public:
         }
         
         //* 速度乘以扫描周期为位移 更新位移
+        //! 看上去这个更新的是绝对位移
         if (imuVeloFromStartX != 0 || imuVeloFromStartY != 0 || imuVeloFromStartZ != 0){
             transformCur[3] -= imuVeloFromStartX * scanPeriod;
             transformCur[4] -= imuVeloFromStartY * scanPeriod;
@@ -1790,6 +1809,7 @@ public:
 
     void updateTransformation(){
 
+        //* 次角点和次平面点的数量不能太少
         if (laserCloudCornerLastNum < 10 || laserCloudSurfLastNum < 100)
             return;
         //* 平面特征优化迭代 
@@ -1978,7 +1998,7 @@ public:
             return;
         }
 
-        //* 初始化位姿估计
+        //? 初始化位姿估计，关键在于弄懂transformCur的六个变量到底代表什么意思
         updateInitialGuess();
 
         //? 平面特征迭代优化  角点特征迭代优化
