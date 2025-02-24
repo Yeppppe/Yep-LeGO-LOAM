@@ -184,6 +184,7 @@ public:
 
         double roll, pitch, yaw;
         geometry_msgs::Quaternion geoQuat = laserOdometry->pose.pose.orientation;
+        //* 四元数提取欧拉角
         tf::Matrix3x3(tf::Quaternion(geoQuat.z, -geoQuat.x, -geoQuat.y, geoQuat.w)).getRPY(roll, pitch, yaw);
 
         transformSum[0] = -pitch;
@@ -194,6 +195,7 @@ public:
         transformSum[4] = laserOdometry->pose.pose.position.y;
         transformSum[5] = laserOdometry->pose.pose.position.z;
 
+        //* 
         transformAssociateToMap();
 
         geoQuat = tf::createQuaternionMsgFromRollPitchYaw

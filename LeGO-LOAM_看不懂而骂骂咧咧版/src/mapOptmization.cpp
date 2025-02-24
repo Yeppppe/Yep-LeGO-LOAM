@@ -239,6 +239,7 @@ public:
         subLaserCloudSurfLast = nh.subscribe<sensor_msgs::PointCloud2>("/laser_cloud_surf_last", 2, &mapOptimization::laserCloudSurfLastHandler, this);
         subOutlierCloudLast = nh.subscribe<sensor_msgs::PointCloud2>("/outlier_cloud_last", 2, &mapOptimization::laserCloudOutlierLastHandler, this);
         subLaserOdometry = nh.subscribe<nav_msgs::Odometry>("/laser_odom_to_init", 5, &mapOptimization::laserOdometryHandler, this);
+        // 只更新了roll 和 pitch的存储
         subImu = nh.subscribe<sensor_msgs::Imu> (imuTopic, 50, &mapOptimization::imuHandler, this);
 
         pubHistoryKeyFrames = nh.advertise<sensor_msgs::PointCloud2>("/history_cloud", 2);
@@ -373,6 +374,7 @@ public:
         latestFrameID = 0;
     }
 
+    // 将坐标转移到世界坐标系下,得到可用于建图的Lidar坐标，即修改了transformTobeMapped的值
     void transformAssociateToMap()
     {
         float x1 = cos(transformSum[1]) * (transformBefMapped[3] - transformSum[3]) 
@@ -545,6 +547,8 @@ public:
     pcl::PointCloud<PointType>::Ptr transformPointCloud(pcl::PointCloud<PointType>::Ptr cloudIn){
 	// !!! DO NOT use pcl for point cloud transformation, results are not accurate
         // Reason: unkown
+        
+        //* cloudOut存储输出后的点云
         pcl::PointCloud<PointType>::Ptr cloudOut(new pcl::PointCloud<PointType>());
 
         PointType *pointFrom;
@@ -722,12 +726,14 @@ public:
     }
 
     void visualizeGlobalMapThread(){
+        // 0.2Hz 5秒执行一次循环
         ros::Rate rate(0.2);
         while (ros::ok()){
             rate.sleep();
             publishGlobalMap();
         }
         // save final point cloud
+        //* 将下采样后的全局地图关键帧保存为PCD文件
         pcl::io::savePCDFileASCII(fileDirectory+"finalCloud.pcd", *globalMapKeyFramesDS);
 
         string cornerMapString = "/tmp/cornerMap.pcd";
@@ -739,17 +745,20 @@ public:
         pcl::PointCloud<PointType>::Ptr surfaceMapCloud(new pcl::PointCloud<PointType>());
         pcl::PointCloud<PointType>::Ptr surfaceMapCloudDS(new pcl::PointCloud<PointType>());
         
+        //* 合并关键帧点云
         for(int i = 0; i < cornerCloudKeyFrames.size(); i++) {
             *cornerMapCloud  += *transformPointCloud(cornerCloudKeyFrames[i],   &cloudKeyPoses6D->points[i]);
     	    *surfaceMapCloud += *transformPointCloud(surfCloudKeyFrames[i],     &cloudKeyPoses6D->points[i]);
     	    *surfaceMapCloud += *transformPointCloud(outlierCloudKeyFrames[i],  &cloudKeyPoses6D->points[i]);
         }
 
+        //* 下采样合并的点云
         downSizeFilterCorner.setInputCloud(cornerMapCloud);
         downSizeFilterCorner.filter(*cornerMapCloudDS);
         downSizeFilterSurf.setInputCloud(surfaceMapCloud);
         downSizeFilterSurf.filter(*surfaceMapCloudDS);
 
+        //* 保存点云
         pcl::io::savePCDFileASCII(fileDirectory+"cornerMap.pcd", *cornerMapCloudDS);
         pcl::io::savePCDFileASCII(fileDirectory+"surfaceMap.pcd", *surfaceMapCloudDS);
         pcl::io::savePCDFileASCII(fileDirectory+"trajectory.pcd", *cloudKeyPoses3D);
@@ -757,9 +766,11 @@ public:
 
     void publishGlobalMap(){
 
+        //* 如果没有订阅者，直接返回
         if (pubLaserCloudSurround.getNumSubscribers() == 0)
             return;
 
+        //* 没有关键帧 直接返回
         if (cloudKeyPoses3D->points.empty() == true)
             return;
 	    // kd-tree to find near key frames to visualize
@@ -768,6 +779,7 @@ public:
 	    // search near key frames to visualize
         mtx.lock();
         kdtreeGlobalMap->setInputCloud(cloudKeyPoses3D);
+        //* kd树半径搜索，currentRobotPosPoint是中心点，globalMapVisualizationSearchRadius是球形半径，pointSearchIndGlobalMap搜索结果点的索引，pointSearchSqDisGlobalMap存储搜索结果点到查询点的平方距离，0表示返回所有在给定半径内的点，不限制数量
         kdtreeGlobalMap->radiusSearch(currentRobotPosPoint, globalMapVisualizationSearchRadius, pointSearchIndGlobalMap, pointSearchSqDisGlobalMap, 0);
         mtx.unlock();
 
@@ -1485,7 +1497,7 @@ public:
     }
 
     void run(){
-
+        //* 找到最新数据且时间同步  0.005是因为200Hz一个数据
         if (newLaserCloudCornerLast  && std::abs(timeLaserCloudCornerLast  - timeLaserOdometry) < 0.005 &&
             newLaserCloudSurfLast    && std::abs(timeLaserCloudSurfLast    - timeLaserOdometry) < 0.005 &&
             newLaserCloudOutlierLast && std::abs(timeLaserCloudOutlierLast - timeLaserOdometry) < 0.005 &&
@@ -1496,12 +1508,14 @@ public:
 
             std::lock_guard<std::mutex> lock(mtx);
 
+            //* 确保当前处理与上次处理有足够的时间间隔  mappingProcessInterval = 0.3
             if (timeLaserOdometry - timeLastProcessing >= mappingProcessInterval) {
 
                 timeLastProcessing = timeLaserOdometry;
-
+                //* 将坐标转移到世界坐标系下,得到可用于建图的Lidar坐标，即修改了transformTobeMapped的值
                 transformAssociateToMap();
 
+                //* 
                 extractSurroundingKeyFrames();
 
                 downsampleCurrentScan();

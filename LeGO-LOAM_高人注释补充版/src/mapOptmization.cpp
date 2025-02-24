@@ -245,6 +245,7 @@ public:
         pubLaserCloudSurround = nh.advertise<sensor_msgs::PointCloud2>("/laser_cloud_surround", 2);
         pubOdomAftMapped = nh.advertise<nav_msgs::Odometry> ("/aft_mapped_to_init", 5);
 
+        //* /laser_cloud_corner_last 收到的实际上是次角点的集合
         subLaserCloudCornerLast = nh.subscribe<sensor_msgs::PointCloud2>("/laser_cloud_corner_last", 2, &mapOptimization::laserCloudCornerLastHandler, this);
         subLaserCloudSurfLast = nh.subscribe<sensor_msgs::PointCloud2>("/laser_cloud_surf_last", 2, &mapOptimization::laserCloudSurfLastHandler, this);
         subOutlierCloudLast = nh.subscribe<sensor_msgs::PointCloud2>("/outlier_cloud_last", 2, &mapOptimization::laserCloudOutlierLastHandler, this);
@@ -661,6 +662,7 @@ public:
         timeLaserOdometry = laserOdometry->header.stamp.toSec();
         double roll, pitch, yaw;
         geometry_msgs::Quaternion geoQuat = laserOdometry->pose.pose.orientation;
+        //* 有意前后都加一个符号是什么意思
         tf::Matrix3x3(tf::Quaternion(geoQuat.z, -geoQuat.x, -geoQuat.y, geoQuat.w)).getRPY(roll, pitch, yaw);
         transformSum[0] = -pitch;
         transformSum[1] = -yaw;
@@ -683,6 +685,7 @@ public:
     }
 
     void publishTF(){
+        //* 创建四元数
         geometry_msgs::Quaternion geoQuat = tf::createQuaternionMsgFromRollPitchYaw
                                   (transformAftMapped[2], -transformAftMapped[0], -transformAftMapped[1]);
 
@@ -702,7 +705,11 @@ public:
         odomAftMapped.twist.twist.linear.z = transformBefMapped[5];
         pubOdomAftMapped.publish(odomAftMapped);
 
+
+        //* aftMappedTrans.frame_id_ = "/camera_init";
+        //* aftMappedTrans.child_frame_id_ = "/aft_mapped";
         aftMappedTrans.stamp_ = ros::Time().fromSec(timeLaserOdometry);
+        //* 设置旋转和平移并发布变换
         aftMappedTrans.setRotation(tf::Quaternion(-geoQuat.y, -geoQuat.z, geoQuat.x, geoQuat.w));
         aftMappedTrans.setOrigin(tf::Vector3(transformAftMapped[3], transformAftMapped[4], transformAftMapped[5]));
         tfBroadcaster.sendTransform(aftMappedTrans);
@@ -794,6 +801,7 @@ public:
         }
     }
 
+    //* 检测回环
     bool detectLoopClosure(){
 
         latestSurfKeyFrameCloud->clear();
@@ -806,6 +814,7 @@ public:
 
         std::vector<int> pointSearchIndLoop;
         std::vector<float> pointSearchSqDisLoop;
+        //* 在位姿图中找最近点，cloudKeyPoses3D表面上数据类型是点云类型，实际上是位姿
         kdtreeHistoryKeyPoses->setInputCloud(cloudKeyPoses3D);
         // 进行半径historyKeyframeSearchRadius内的邻域搜索，
         // currentRobotPosPoint：需要查询的点，
@@ -823,6 +832,7 @@ public:
                 break;
             }
         }
+        //* 没有找到合适的位姿
         if (closestHistoryFrameID == -1){
             // 找到的点和当前时间上没有超过30秒的
             return false;
@@ -849,6 +859,7 @@ public:
         *latestSurfKeyFrameCloud   = *hahaCloud;
 
         // historyKeyframeSearchNum在utility.h中定义为25，前后25个点进行变换
+        //* 找到最近历史关键帧后 前后各取25帧
         for (int j = -historyKeyframeSearchNum; j <= historyKeyframeSearchNum; ++j){
             if (closestHistoryFrameID + j < 0 || closestHistoryFrameID + j > latestFrameIDLoopCloure)
                 continue;
@@ -890,6 +901,7 @@ public:
 
         potentialLoopFlag = false;
 
+        //* 设置icp迭代及其参数
         pcl::IterativeClosestPoint<PointType, PointType> icp;
         icp.setMaxCorrespondenceDistance(100);
         icp.setMaximumIterations(100);
@@ -938,6 +950,7 @@ public:
         constraintNoise = noiseModel::Diagonal::Variances(Vector6);
 
         std::lock_guard<std::mutex> lock(mtx);
+        //* 创建回环因子
         gtSAMgraph.add(BetweenFactor<Pose3>(latestFrameIDLoopCloure, closestHistoryFrameID, poseFrom.between(poseTo), constraintNoise));
         isam->update(gtSAMgraph);
         isam->update();
@@ -984,7 +997,7 @@ public:
                         break;
                 }
 
-
+                
             }else{
                 // recentCornerCloudKeyFrames中点云保存的数量较多
                 // pop队列最前端的一个，再push后面一个
@@ -1116,6 +1129,7 @@ public:
         downSizeFilterOutlier.filter(*laserCloudOutlierLastDS);
         laserCloudOutlierLastDSNum = laserCloudOutlierLastDS->points.size();
 
+        //* laserCloudSurfTotalLastDS包括平面点和外点共同下采样
         laserCloudSurfTotalLast->clear();
         laserCloudSurfTotalLastDS->clear();
         *laserCloudSurfTotalLast += *laserCloudSurfLastDS;
@@ -1487,10 +1501,12 @@ public:
 
     void saveKeyFramesAndFactor(){
 
+        //* 更新当前机器人位置
         currentRobotPosPoint.x = transformAftMapped[3];
         currentRobotPosPoint.y = transformAftMapped[4];
         currentRobotPosPoint.z = transformAftMapped[5];
 
+        //* 判断是否保存这个关键帧，如果与桑一个关键帧的距离小于0.3，则不保存
         bool saveThisKeyFrame = true;
         if (sqrt((previousRobotPosPoint.x-currentRobotPosPoint.x)*(previousRobotPosPoint.x-currentRobotPosPoint.x)
                 +(previousRobotPosPoint.y-currentRobotPosPoint.y)*(previousRobotPosPoint.y-currentRobotPosPoint.y)
@@ -1498,11 +1514,13 @@ public:
             saveThisKeyFrame = false;
         }
 
+        //* 不保存已有关键帧，直接返回
         if (saveThisKeyFrame == false && !cloudKeyPoses3D->points.empty())
         	return;
 
         previousRobotPosPoint = currentRobotPosPoint;
 
+        //* 如果是第一个关键帧 添加先验因子到图中，添加初始估计，更新transformLast
         if (cloudKeyPoses3D->points.empty()){
             // static Rot3 	RzRyRx (double x, double y, double z),Rotations around Z, Y, then X axes
             // RzRyRx依次按照z(transformTobeMapped[2])，y(transformTobeMapped[0])，x(transformTobeMapped[1])坐标轴旋转
@@ -1552,15 +1570,18 @@ public:
         Pose3 latestEstimate;
 
         // Compute an estimate from the incomplete linear delta computed during the last update.
+        //* 获取最新的位姿估计
         isamCurrentEstimate = isam->calculateEstimate();
         latestEstimate = isamCurrentEstimate.at<Pose3>(isamCurrentEstimate.size()-1);
 
+        //* 保存3D位姿
         thisPose3D.x = latestEstimate.translation().y();
         thisPose3D.y = latestEstimate.translation().z();
         thisPose3D.z = latestEstimate.translation().x();
         thisPose3D.intensity = cloudKeyPoses3D->points.size();
         cloudKeyPoses3D->push_back(thisPose3D);
 
+        //* 保存6D位姿
         thisPose6D.x = thisPose3D.x;
         thisPose6D.y = thisPose3D.y;
         thisPose6D.z = thisPose3D.z;
@@ -1571,6 +1592,7 @@ public:
         thisPose6D.time = timeLaserOdometry;
         cloudKeyPoses6D->push_back(thisPose6D);
 
+        //* 更新transformAftMapped和transformLast
         if (cloudKeyPoses3D->points.size() > 1){
             transformAftMapped[0] = latestEstimate.rotation().pitch();
             transformAftMapped[1] = latestEstimate.rotation().yaw();
@@ -1594,18 +1616,23 @@ public:
         pcl::copyPointCloud(*laserCloudSurfLastDS,    *thisSurfKeyFrame);
         pcl::copyPointCloud(*laserCloudOutlierLastDS, *thisOutlierKeyFrame);
 
+        //* 将对应点添加到对应关键帧集合中
         cornerCloudKeyFrames.push_back(thisCornerKeyFrame);
         surfCloudKeyFrames.push_back(thisSurfKeyFrame);
         outlierCloudKeyFrames.push_back(thisOutlierKeyFrame);
     }
 
+    //* 在闭环检测后矫正位姿
     void correctPoses(){
+        //* 查看是否检测到闭环
     	if (aLoopIsClosed == true){
             recentCornerCloudKeyFrames. clear();
             recentSurfCloudKeyFrames.   clear();
             recentOutlierCloudKeyFrames.clear();
 
+            //* 获取当前估计位姿的数量
             int numPoses = isamCurrentEstimate.size();
+            //* 遍历所有位姿并更新其值
 			for (int i = 0; i < numPoses; ++i)
 			{
 				cloudKeyPoses3D->points[i].x = isamCurrentEstimate.at<Pose3>(i).translation().y();
@@ -1650,17 +1677,22 @@ public:
 
                 transformAssociateToMap();
 
+                //* 提取周围关键帧
                 extractSurroundingKeyFrames();
 
+                //* 下采样回调函数采集的角点，平面点，外点等点云
                 downsampleCurrentScan();
 
                 // 当前扫描进行边缘优化，图优化以及进行LM优化的过程
                 scan2MapOptimization();
 
+                //* 保存关键帧和因子图
                 saveKeyFramesAndFactor();
 
+                //* 闭环矫正位姿
                 correctPoses();
 
+                //* 
                 publishTF();
 
                 publishKeyPosesAndFrames();

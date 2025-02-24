@@ -2032,6 +2032,7 @@ public:
 
 
 
+//!!!!!!!!!!!!!!!!!!!!! 注意这个.cpp代码的注释最好去看LeGO-LOAM高人注释版本，他写的思考起来是对的，我这个一开始就理解错了，其他的.cpp代码可以看我这，毕竟比较新
 int main(int argc, char** argv)
 {
     ros::init(argc, argv, "lego_loam");
